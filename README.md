@@ -10,9 +10,9 @@ View your app in AI Studio: https://ai.studio/apps/09abe258-34ec-44bb-bd8a-a7889
 
 ## Run On GitHub
 
-This repo is configured to deploy to GitHub Pages automatically when you push to `main`.
+This repo can be published to GitHub Pages from the `gh-pages` branch.
 
-After GitHub Pages is enabled for this repository, the app will be available at:
+After GitHub Pages is configured to deploy from `gh-pages` at the repository root, the app will be available at:
 
 `https://zhuyanhe1975-hit.github.io/LoongEnv_IDE/`
 
