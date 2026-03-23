@@ -1,0 +1,24 @@
+const { chromium } = require('playwright');
+(async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+  const logs = [];
+  const failed = [];
+  page.on('console', (msg) => logs.push(`[${msg.type()}] ${msg.text()}`));
+  page.on('pageerror', (err) => logs.push(`[pageerror] ${err.message}`));
+  page.on('requestfailed', (req) => failed.push(`${req.method()} ${req.url()} :: ${req.failure()?.errorText || 'failed'}`));
+  await page.goto('http://localhost:3000', { waitUntil: 'load', timeout: 30000 });
+  await page.locator('button').nth(9).click();
+  await page.waitForTimeout(18000);
+  await page.screenshot({ path: 'D:/AI/loongenv/playwright-stl-check.png', timeout: 0 });
+  console.log('BODY_START');
+  console.log((await page.locator('body').innerText()).slice(0, 2500));
+  console.log('BODY_END');
+  console.log('LOGS_START');
+  console.log(logs.join('\n') || '(none)');
+  console.log('LOGS_END');
+  console.log('FAILED_START');
+  console.log(failed.join('\n') || '(none)');
+  console.log('FAILED_END');
+  await browser.close();
+})();
