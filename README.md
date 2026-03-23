@@ -8,6 +8,14 @@ This contains everything you need to run your app locally.
 
 View your app in AI Studio: https://ai.studio/apps/09abe258-34ec-44bb-bd8a-a78896fcb135
 
+## Run On GitHub
+
+This repo is configured to deploy to GitHub Pages automatically when you push to `main`.
+
+After GitHub Pages is enabled for this repository, the app will be available at:
+
+`https://zhuyanhe1975-hit.github.io/LoongEnv_IDE/`
+
 ## Run Locally
 
 **Prerequisites:**  Node.js
