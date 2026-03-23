@@ -8,6 +8,7 @@ interface LogoProps {
 
 export const Logo: React.FC<LogoProps> = ({ className = '', size = 'md', showText = true }) => {
   const [imgError, setImgError] = useState(false);
+  const logoUrl = `${import.meta.env.BASE_URL}logo.png`;
 
   const sizeClasses = {
     sm: 'w-16 h-16',
@@ -28,7 +29,7 @@ export const Logo: React.FC<LogoProps> = ({ className = '', size = 'md', showTex
           {/* Glow effect behind the logo */}
           <div className="absolute inset-0 bg-loong-accent/30 blur-md rounded-full animate-pulse" />
           <img 
-            src="/logo.png" 
+            src={logoUrl}
             alt="LoongEnv Logo" 
             className="relative z-10 w-full h-full object-contain drop-shadow-[0_0_8px_rgba(0,255,255,0.5)]"
             onError={() => setImgError(true)}

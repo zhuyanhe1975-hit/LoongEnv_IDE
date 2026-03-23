@@ -8,7 +8,7 @@ type MujocoData = any;
 
 type LoadState = 'loading' | 'ready' | 'error';
 
-const MODEL_ROOT = '/models/';
+const MODEL_ROOT = `${import.meta.env.BASE_URL}models/`;
 const SCENE_FILE = 'er15-1400.mjcf.xml';
 const MUJOCO_JS_URL = 'https://unpkg.com/mujoco-js@0.0.7/dist/mujoco_wasm.js';
 const MUJOCO_WASM_URL = 'https://unpkg.com/mujoco-js@0.0.7/dist/mujoco_wasm.wasm';
