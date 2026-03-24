@@ -1,0 +1,5 @@
+{
+  "name": "Remix: LoongEnv - Industrial Robot Engineering Environment",
+  "description": "An integrated design-control-deployment environment for industrial robots, covering the full engineering lifecycle from design to monitoring.",
+  "requestFramePermissions": []
+}

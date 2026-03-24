@@ -1,0 +1,64 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-loong-red: #E63946;
+  --color-loong-dark: var(--bg-main);
+  --color-loong-accent: #38BDF8;
+}
+
+:root {
+  --bg-main: #0F172A;
+  --text-main: #E2E8F0;
+  --text-muted: #94A3B8;
+  --card-bg: rgba(255, 255, 255, 0.05);
+  --card-border: rgba(255, 255, 255, 0.1);
+  --grid-color: rgba(255, 255, 255, 0.05);
+  --nav-bg: rgba(15, 23, 42, 0.8);
+}
+
+:root.light {
+  --bg-main: #F8FAFC;
+  --text-main: #1E293B;
+  --text-muted: #64748B;
+  --card-bg: rgba(255, 255, 255, 0.8);
+  --card-border: rgba(0, 0, 0, 0.1);
+  --grid-color: rgba(0, 0, 0, 0.05);
+  --nav-bg: rgba(248, 250, 252, 0.8);
+}
+
+@layer base {
+  body {
+    background-color: var(--bg-main);
+    color: var(--text-main);
+    @apply font-sans antialiased transition-colors duration-300;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display tracking-tight;
+  }
+}
+
+.glass-card {
+  background-color: var(--card-bg);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--card-border);
+  @apply rounded-2xl shadow-sm;
+}
+
+.tech-grid {
+  background-image: radial-gradient(circle at 1px 1px, var(--grid-color) 1px, transparent 0);
+  background-size: 40px 40px;
+}
+
+.glow-text {
+  text-shadow: 0 0 20px rgba(56, 189, 248, 0.3);
+}
+
+.text-muted {
+  color: var(--text-muted);
+}
