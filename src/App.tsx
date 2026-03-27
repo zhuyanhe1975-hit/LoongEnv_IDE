@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useEffectEvent, useMemo, useState } from 'react';
 import {
   Activity,
   Bot,
@@ -35,6 +35,12 @@ type ModuleMeta = {
   description: string;
   icon: React.ComponentType<{ size?: number; className?: string }>;
   color: string;
+};
+
+type PanelTabMeta = {
+  id: PanelId;
+  label: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
 };
 
 const MODULES: ModuleMeta[] = [
@@ -115,6 +121,42 @@ const RECENT_LOGS = [
   '[twin] Collision probes ready, no blocking contacts',
   '[box] Runtime target: LOONG_BOX_V2',
 ];
+
+const PANEL_TABS: PanelTabMeta[] = [
+  { id: 'guide', icon: Bot, label: 'Guide' },
+  { id: 'output', icon: Server, label: 'Output' },
+  { id: 'terminal', icon: Terminal, label: 'Terminal' },
+];
+
+const STORAGE_KEYS = {
+  activeModule: 'loongenv.active-module',
+  activePanel: 'loongenv.active-panel',
+  navCollapsed: 'loongenv.nav-collapsed',
+  panelCollapsed: 'loongenv.panel-collapsed',
+  studioStep: 'loongenv.studio-step',
+} as const;
+
+function useStoredState<T>(key: string, initialValue: T) {
+  const [state, setState] = useState<T>(() => {
+    if (typeof window === 'undefined') return initialValue;
+
+    const rawValue = window.localStorage.getItem(key);
+    if (!rawValue) return initialValue;
+
+    try {
+      return JSON.parse(rawValue) as T;
+    } catch {
+      return initialValue;
+    }
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(key, JSON.stringify(state));
+  }, [key, state]);
+
+  return [state, setState] as const;
+}
 
 function getModuleMeta(id: ModuleId) {
   return MODULES.find((module) => module.id === id) ?? MODULES[0];
@@ -319,9 +361,8 @@ function StudioOperationPanel(props: { step: StudioStep }) {
   );
 }
 
-function StudioWorkbench() {
-  const [step, setStep] = useState<StudioStep>('scene');
-  const stepMeta = STUDIO_STEPS.find((item) => item.id === step) ?? STUDIO_STEPS[0];
+function StudioWorkbench(props: { step: StudioStep; onStepChange: (step: StudioStep) => void }) {
+  const stepMeta = STUDIO_STEPS.find((item) => item.id === props.step) ?? STUDIO_STEPS[0];
 
   return (
     <EditorChrome
@@ -339,7 +380,7 @@ function StudioWorkbench() {
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted">Workflow Tabs</div>
           <div className="flex items-end gap-2 overflow-x-auto">
           {STUDIO_STEPS.map((item) => (
-            <StepButton key={item.id} active={step === item.id} label={item.label} onClick={() => setStep(item.id)} />
+            <StepButton key={item.id} active={props.step === item.id} label={item.label} onClick={() => props.onStepChange(item.id)} />
           ))}
           </div>
         </div>
@@ -348,7 +389,7 @@ function StudioWorkbench() {
           <SectionTitle icon={FolderTree} label="Operation Panel" tone="text-blue-400" />
           <div className="mb-4 text-sm font-semibold text-main">{stepMeta.title}</div>
           <div className="mb-6 text-sm leading-relaxed text-muted">{stepMeta.hint}</div>
-          <StudioOperationPanel step={step} />
+          <StudioOperationPanel step={props.step} />
         </div>
 
         <div className="relative min-h-0 overflow-hidden border-r border-[var(--card-border)]">
@@ -481,18 +522,72 @@ function PlaceholderWorkbench(props: { module: ModuleMeta }) {
   );
 }
 
-function renderWorkbench(module: ModuleId) {
-  if (module === 'studio') return <StudioWorkbench />;
+function renderWorkbench(module: ModuleId, studioStep: StudioStep, onStudioStepChange: (step: StudioStep) => void) {
+  if (module === 'studio') return <StudioWorkbench step={studioStep} onStepChange={onStudioStepChange} />;
   if (module === 'twin') return <TwinWorkbench />;
   return <PlaceholderWorkbench module={getModuleMeta(module)} />;
 }
 
 export default function App() {
-  const [activeModule, setActiveModule] = useState<ModuleId>('studio');
-  const [activePanel, setActivePanel] = useState<PanelId>('guide');
-  const [navCollapsed, setNavCollapsed] = useState(false);
+  const [activeModule, setActiveModule] = useStoredState<ModuleId>(STORAGE_KEYS.activeModule, 'studio');
+  const [activePanel, setActivePanel] = useStoredState<PanelId>(STORAGE_KEYS.activePanel, 'guide');
+  const [navCollapsed, setNavCollapsed] = useStoredState(STORAGE_KEYS.navCollapsed, false);
+  const [panelCollapsed, setPanelCollapsed] = useStoredState(STORAGE_KEYS.panelCollapsed, false);
+  const [studioStep, setStudioStep] = useStoredState<StudioStep>(STORAGE_KEYS.studioStep, 'scene');
   const activeMeta = getModuleMeta(activeModule);
   const navWidth = useMemo(() => (navCollapsed ? 72 : 248), [navCollapsed]);
+  const studioStepIndex = STUDIO_STEPS.findIndex((item) => item.id === studioStep);
+
+  const handleKeyDown = useEffectEvent((event: KeyboardEvent) => {
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable ||
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.tagName === 'SELECT')
+    ) {
+      return;
+    }
+
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+    if (/^[1-5]$/.test(event.key)) {
+      const index = Number(event.key) - 1;
+      const module = MODULES[index];
+      if (module) {
+        event.preventDefault();
+        setActiveModule(module.id);
+      }
+      return;
+    }
+
+    const key = event.key.toLowerCase();
+    if (key === 'g') setActivePanel('guide');
+    if (key === 'o') setActivePanel('output');
+    if (key === 't') setActivePanel('terminal');
+    if (key === 'n') setNavCollapsed((current) => !current);
+    if (key === '\\') setPanelCollapsed((current) => !current);
+
+    if (activeModule !== 'studio') return;
+
+    if (event.key === '[') {
+      event.preventDefault();
+      const nextStep = STUDIO_STEPS[Math.max(studioStepIndex - 1, 0)];
+      setStudioStep(nextStep.id);
+    }
+
+    if (event.key === ']') {
+      event.preventDefault();
+      const nextStep = STUDIO_STEPS[Math.min(studioStepIndex + 1, STUDIO_STEPS.length - 1)];
+      setStudioStep(nextStep.id);
+    }
+  });
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleKeyDown]);
 
   return (
     <div className="h-screen overflow-hidden bg-[var(--bg-main)] text-[var(--text-main)]">
@@ -500,7 +595,7 @@ export default function App() {
         className="grid h-full"
         style={{
           gridTemplateColumns: `${navWidth}px minmax(0,1fr)`,
-          gridTemplateRows: 'minmax(0,1fr) 180px 24px',
+          gridTemplateRows: `minmax(0,1fr) ${panelCollapsed ? '44px' : '180px'} 24px`,
         }}
       >
         <aside className="row-span-2 flex min-h-0 flex-col border-r border-[var(--card-border)] bg-[#151c2b]">
@@ -600,18 +695,15 @@ export default function App() {
               exit={{ opacity: 0, y: -8 }}
               className="min-h-0 flex-1"
             >
-              {renderWorkbench(activeModule)}
+              {renderWorkbench(activeModule, studioStep, setStudioStep)}
             </motion.div>
           </AnimatePresence>
         </section>
 
         <section className="col-start-2 min-h-0 border-t border-[var(--card-border)] bg-[#161d2e]">
-          <div className="flex h-9 items-center gap-1 border-b border-[var(--card-border)] px-2">
-            {[
-              { id: 'guide' as PanelId, icon: Bot, label: 'Guide' },
-              { id: 'output' as PanelId, icon: Server, label: 'Output' },
-              { id: 'terminal' as PanelId, icon: Terminal, label: 'Terminal' },
-            ].map((item) => (
+          <div className="flex h-11 items-center justify-between gap-2 border-b border-[var(--card-border)] px-2">
+            <div className="flex min-w-0 items-center gap-1">
+            {PANEL_TABS.map((item) => (
               <button
                 key={item.id}
                 onClick={() => setActivePanel(item.id)}
@@ -623,30 +715,50 @@ export default function App() {
                 {item.label}
               </button>
             ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="hidden items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-muted xl:flex">
+                <span>1-5 Modules</span>
+                <span>G/O/T Panels</span>
+                {activeModule === 'studio' && <span>[ ] Steps</span>}
+              </div>
+              <button
+                onClick={() => setPanelCollapsed((current) => !current)}
+                className="flex h-8 items-center gap-2 rounded-sm px-3 text-sm text-muted transition-colors hover:bg-white/5 hover:text-main"
+                title={panelCollapsed ? 'Expand bottom panel' : 'Collapse bottom panel'}
+              >
+                <ChevronDown size={16} className={panelCollapsed ? '-rotate-180' : ''} />
+                <span>{panelCollapsed ? 'Expand' : 'Collapse'}</span>
+              </button>
+            </div>
           </div>
-          <div className="h-[calc(100%-36px)] overflow-y-auto px-4 py-3 font-mono text-[12px] text-muted">
-            {activePanel === 'guide' && (
+          {!panelCollapsed && (
+            <div className="h-[calc(100%-44px)] overflow-y-auto px-4 py-3 font-mono text-[12px] text-muted">
+              {activePanel === 'guide' && (
               <div className="space-y-2">
                 <div>[guide] 左侧导航固定，模块切换位置固定</div>
                 <div>[guide] 右侧只保留状态与说明，不再重复展示参数</div>
                 <div>[guide] 当前步骤的详细输入统一进入底部面板</div>
+                <div>[guide] 1-5 切模块，G/O/T 切面板，N 折叠导航，\ 折叠底部面板</div>
+                {activeModule === 'studio' && <div>[guide] [ 和 ] 可以在 Studio 步骤之间前后切换</div>}
               </div>
-            )}
-            {activePanel === 'output' && (
+              )}
+              {activePanel === 'output' && (
               <div className="space-y-2">
                 {RECENT_LOGS.map((log) => (
                   <div key={log}>{log}</div>
                 ))}
               </div>
-            )}
-            {activePanel === 'terminal' && (
+              )}
+              {activePanel === 'terminal' && (
               <div className="space-y-2">
                 <div>PS D:\AI\loongenv&gt; npm run build</div>
                 <div>vite build completed</div>
                 <div>workspace shell active</div>
               </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
         </section>
 
         <footer className="col-span-2 flex items-center justify-between border-t border-[#0b1220] bg-[#007acc] px-3 text-[12px] text-white">
