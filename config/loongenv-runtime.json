@@ -1,0 +1,209 @@
+{
+  "servo": {
+    "baseline": [
+      { "name": "joint_1", "kp": 260, "ki": 0.0, "kd": 32, "ctrlrange": [-2.967, 2.967], "forcerange": [-800, 800] },
+      { "name": "joint_2", "kp": 320, "ki": 0.0, "kd": 40, "ctrlrange": [-2.7925, 1.5708], "forcerange": [-800, 800] },
+      { "name": "joint_3", "kp": 260, "ki": 0.0, "kd": 34, "ctrlrange": [-1.4835, 3.0543], "forcerange": [-800, 800] },
+      { "name": "joint_4", "kp": 90, "ki": 0.0, "kd": 6, "ctrlrange": [-3.316, 3.316], "forcerange": [-400, 400] },
+      { "name": "joint_5", "kp": 48, "ki": 0.0, "kd": 3, "ctrlrange": [-2.2689, 2.2689], "forcerange": [-150, 150] },
+      { "name": "joint_6", "kp": 10, "ki": 0.0, "kd": 2, "ctrlrange": [-6.2832, 6.2832], "forcerange": [-20, 20] }
+    ],
+    "speed_limits": {
+      "joint_1": 1.6,
+      "joint_2": 1.6,
+      "joint_3": 1.6,
+      "joint_4": 2.0,
+      "joint_5": 2.2,
+      "joint_6": 3.0
+    },
+    "gain_bounds": {
+      "kp_floor_min": 2,
+      "kp_min_span": 20,
+      "kp_base_scale_min": 0.2,
+      "kp_force_scale_min": 0.0,
+      "kp_base_scale_max": 2.4,
+      "kp_force_scale_max": 2.8,
+      "kd_floor_min": 0,
+      "kd_min_span": 1,
+      "kd_base_scale_min": 0.2,
+      "kd_kp_scale_min": 0.0,
+      "kd_base_scale_max": 3.5,
+      "kd_kp_scale_max": 0.2,
+      "ki_base_scale_max": 1.6,
+      "ki_floor_max": 0.5
+    },
+    "acceptance": {
+      "peak_error": 0.12,
+      "average_error": 0.05,
+      "peak_velocity": 1.6,
+      "tracking_error_warn": 0.02
+    },
+    "ideal_effort_scale": 1.5,
+    "ideal_effort_floor": 4.5
+  },
+  "backend_control": {
+    "ff_mode": "ideal",
+    "computed_torque": true,
+    "ideal_actuation": false
+  },
+  "physics": {
+    "sim_dt": 0.001,
+    "joint_dynamics": {
+      "joint_1": { "damping": 8.0, "frictionloss": 50.0, "armature": 0.08 },
+      "joint_2": { "damping": 9.0, "frictionloss": 50.0, "armature": 0.08 },
+      "joint_3": { "damping": 8.5, "frictionloss": 50.0, "armature": 0.07 },
+      "joint_4": { "damping": 2.8, "frictionloss": 2.5, "armature": 0.02 },
+      "joint_5": { "damping": 2.0, "frictionloss": 1.2, "armature": 0.015 },
+      "joint_6": { "damping": 0.8, "frictionloss": 0.3, "armature": 0.006 }
+    }
+  },
+  "optimization": {
+    "defaults": {
+      "jobs": 32,
+      "rounds": 6,
+      "trials_per_round": 4096
+    },
+    "limits": {
+      "jobs_min": 1,
+      "jobs_max": 64,
+      "rounds_min": 1,
+      "rounds_max": 32,
+      "trials_per_round_min": 16,
+      "trials_per_round_max": 8192
+    },
+    "gpu_batch": {
+      "batch_min": 32,
+      "batch_max": 512,
+      "refine_min": 64,
+      "refine_max": 256,
+      "elite_ratio": 0.0625
+    },
+    "cem": {
+      "elite_ratio": 0.125,
+      "mean_momentum": 0.25,
+      "std_momentum": 0.2,
+      "min_std_ratio": 0.025,
+      "max_std_ratio": 0.35,
+      "exploration_start": 1.0,
+      "exploration_end": 0.35,
+      "pool_elite_multiplier": 4,
+      "improve_threshold_ratio": 0.01,
+      "mean_step_improve": 0.55,
+      "mean_step_stable": 0.18,
+      "mean_step_freeze": 0.06,
+      "sigma_shrink_improve": 0.94,
+      "sigma_shrink_stable": 0.9,
+      "sigma_shrink_freeze": 0.84,
+      "freeze_round_ratio": 0.5
+    },
+    "search": {
+      "exploration_start": 0.18,
+      "exploration_end": 0.05,
+      "kp_span_base": 0.06,
+      "kp_span_scale": 0.35,
+      "kd_span_base": 0.05,
+      "kd_span_scale": 0.28,
+      "ki_span_base": 0.08,
+      "ki_span_scale": 0.45,
+      "best_anchor_stride": 3,
+      "push_stride": 19,
+      "damped_stride": 5,
+      "push_kp_boost": 0.08,
+      "push_kd_boost": 0.04,
+      "damped_kd_boost": 0.18,
+      "damped_ki_scale": 0.5,
+      "elite_min": 16,
+      "elite_max": 32,
+      "elite_divisor": 24
+    },
+    "validation_profiles": {
+      "online": {
+        "playback_dt": 0.15,
+        "hold_extra_duration": 0.0,
+        "trajectory_scale": 1.0,
+        "early_stop_peak_error": 0.0,
+        "early_stop_peak_velocity": 0.0,
+        "early_stop_oscillations": 0,
+        "active_check_interval": 0
+      },
+      "screen": {
+        "playback_dt": 0.15,
+        "hold_extra_duration": 0.2,
+        "trajectory_scale": 0.18,
+        "early_stop_peak_error": 3.0,
+        "early_stop_peak_velocity": 80.0,
+        "early_stop_oscillations": 12,
+        "active_check_interval": 64
+      },
+      "full": {
+        "playback_dt": 0.05,
+        "hold_extra_duration": 4.0,
+        "trajectory_scale": 1.0
+      },
+      "online_keep_per_round": 256,
+      "screen_keep_per_round": 64,
+      "final_refine_candidates": 64
+    },
+    "online_rl": {
+      "enabled": true,
+      "window_count": 4,
+      "survivor_ratio": 0.5,
+      "survivor_min": 256,
+      "window_keep_per_round": 256,
+      "score_weights": {
+        "dynamic_peak": 560.0,
+        "dynamic_mean": 320.0,
+        "hold_peak": 220.0,
+        "hold_velocity": 40.0,
+        "peak_velocity": 45.0,
+        "peak_torque": 0.03,
+        "settle_time": 6.0,
+        "oscillation": 6.0
+      }
+    }
+  },
+  "tuning": {
+    "control_mode_scout": {
+      "enabled": false
+    },
+    "ideal_preflight": {
+      "enabled": false,
+      "ff_mode": "ideal",
+      "computed_torque": true,
+      "ideal_actuation": true,
+      "warn_peak_error": 0.2,
+      "warn_hold_peak_error": 0.02
+    }
+  },
+  "replay": {
+    "dt": 0.05,
+    "hold_extra_duration": 4.0,
+    "playback_fps": 20,
+    "debug_disturbance": false,
+    "default_peak_error": 0.018,
+    "default_hold_peak_error": 0.0015
+  },
+  "planner": {
+    "home_joints": [0.0, -0.72, 1.28, 0.0, 1.02, 0.0],
+    "segment_dt": 0.05,
+    "workspace_wave_dt": 0.05,
+    "tuning_validation": {
+      "duration": 5.0,
+      "dt": 0.05,
+      "cycles": 1.0,
+      "amplitudes": [0.35, 0.30, 0.35, 0.25, 0.18, 0.30],
+      "phases": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      "hold_duration": 0.0
+    },
+    "full_task": {
+      "samples": [
+        { "time": 0.0, "joints": [0.0, -0.72, 1.28, 0.0, 1.02, 0.0], "suction": false, "label": "approach-home" },
+        { "time": 1.0, "joints": [0.12, -0.64, 1.34, 0.05, 1.05, 0.02], "suction": false, "label": "approach-source" },
+        { "time": 2.0, "joints": [0.18, -0.58, 1.42, 0.08, 1.08, 0.04], "suction": true, "label": "pick" },
+        { "time": 3.4, "joints": [-0.05, -0.68, 1.26, -0.04, 0.98, -0.03], "suction": true, "label": "transfer" },
+        { "time": 4.6, "joints": [-0.16, -0.82, 1.18, -0.08, 0.94, -0.06], "suction": false, "label": "place" },
+        { "time": 5.8, "joints": [0.0, -0.72, 1.28, 0.0, 1.02, 0.0], "suction": false, "label": "return-home" }
+      ]
+    }
+  }
+}

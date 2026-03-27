@@ -1,8 +1,13 @@
 node_modules/
+.venv-newton/
+.venv-backend/
 build/
 dist/
 coverage/
 .DS_Store
 *.log
+__pycache__/
+*.pyc
+logs/
 .env*
 !.env.example

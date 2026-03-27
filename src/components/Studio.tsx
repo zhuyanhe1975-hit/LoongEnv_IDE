@@ -60,7 +60,7 @@ export const Studio: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [useAIStrategy, setUseAIStrategy] = useState(true);
   const [parallelWorkers, setParallelWorkers] = useState(8);
   const [maxRounds, setMaxRounds] = useState(5);
-  const [trialsPerRound, setTrialsPerRound] = useState(24);
+  const [trialsPerRound, setTrialsPerRound] = useState(8192);
   const [simDuration, setSimDuration] = useState(5);
   const [resumeOptimization, setResumeOptimization] = useState(true);
 
@@ -342,9 +342,9 @@ export const Studio: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                               </div>
 
                               {[
-                                { label: '并行进程数', value: parallelWorkers, setter: setParallelWorkers, min: 1, max: 8, step: 1 },
+                                { label: '并行进程数', value: parallelWorkers, setter: setParallelWorkers, min: 1, max: 64, step: 1 },
                                 { label: '优化轮数', value: maxRounds, setter: setMaxRounds, min: 1, max: 20, step: 1 },
-                                { label: '每轮试验数', value: trialsPerRound, setter: setTrialsPerRound, min: 4, max: 80, step: 1 },
+                                { label: '每轮试验数', value: trialsPerRound, setter: setTrialsPerRound, min: 16, max: 8192, step: 16 },
                                 { label: '仿真时长 (s)', value: simDuration, setter: setSimDuration, min: 1, max: 15, step: 0.5 },
                               ].map((item) => (
                                 <div key={item.label}>

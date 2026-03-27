@@ -7,69 +7,180 @@ type MujocoModule = any;
 type MujocoModel = any;
 type MujocoData = any;
 
-type LoadState = 'loading' | 'ready' | 'error';
+export type ViewerJointTelemetry = {
+  name: string;
+  position: number;
+  velocity: number;
+  torque: number;
+  error: number;
+};
+
+export type ViewerRuntimeStatus = {
+  phase: string;
+  collisionActiveCount: number;
+  lastCollisionPair: string;
+  joints: ViewerJointTelemetry[];
+};
+
+export type ViewerReplayBodyPose = {
+  name: string;
+  position: [number, number, number];
+  quaternion: [number, number, number, number];
+};
+
+export type ViewerReplayFrame = {
+  time: number;
+  phase: string;
+  collisionActiveCount: number;
+  lastCollisionPair: string;
+  joints: ViewerJointTelemetry[];
+  bodyPoses?: ViewerReplayBodyPose[];
+};
+
+export type ViewerReplay = {
+  duration: number;
+  playback_fps?: number;
+  frames: ViewerReplayFrame[];
+};
+
+type TrajectorySample = {
+  time: number;
+  joints: [number, number, number, number, number, number];
+  suction: boolean;
+  label: string;
+};
+
+type ViewerTrajectoryPlan = {
+  pickupBoxId: string | null;
+  samples: TrajectorySample[];
+  controller?: string;
+  gripperMode?: string;
+  duration?: number;
+};
+
+type ViewerServoJointConfig = {
+  name: string;
+  kp: number;
+  ki: number;
+  kd: number;
+  forcerange: [number, number];
+};
+
 type MujocoViewerProps = {
   sceneFile?: string;
   sceneXmlOverride?: string | null;
+  trajectoryPlan?: ViewerTrajectoryPlan | null;
+  servoConfig?: ViewerServoJointConfig[];
+  replay?: ViewerReplay | null;
+  onStatusUpdate?: (status: ViewerRuntimeStatus) => void;
 };
+
 type ControlledJoint = {
-  jointIndex: number;
+  name: string;
   qposAdr: number;
+  qvelAdr: number;
   min: number;
   max: number;
-  maxSpeed: number;
 };
+
+type LoadState = 'loading' | 'ready' | 'error';
 
 const MODEL_ROOT = '/models/';
 const DEFAULT_SCENE_FILE = 'er15-1400.mjcf.xml';
 const MUJOCO_JS_URL = 'https://unpkg.com/mujoco-js@0.0.7/dist/mujoco_wasm.js';
 const MUJOCO_WASM_URL = 'https://unpkg.com/mujoco-js@0.0.7/dist/mujoco_wasm.wasm';
+const EMPTY_STATUS: ViewerRuntimeStatus = { phase: '待机', collisionActiveCount: 0, lastCollisionPair: '-', joints: [] };
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function lerp(current: number, target: number, alpha: number) {
-  return current + (target - current) * alpha;
+function readMjName(module: MujocoModule, namesPtr: number, adr: number) {
+  if (!Number.isFinite(namesPtr) || !Number.isFinite(adr) || adr < 0) return '';
+  return module.UTF8ToString(namesPtr + adr);
+}
+
+function readMjObjectName(module: MujocoModule, model: MujocoModel, objectKey: 'mjOBJ_BODY' | 'mjOBJ_JOINT', objectId: number, adr?: number) {
+  const enumValue = (module.mjtObj?.[objectKey] as { value?: number } | number | undefined);
+  const resolvedEnum = typeof enumValue === 'object' ? enumValue?.value : enumValue;
+  if (typeof module.mj_id2name === 'function' && Number.isFinite(resolvedEnum) && objectId >= 0) {
+    const resolvedName = module.mj_id2name(model, resolvedEnum, objectId);
+    if (resolvedName) return resolvedName;
+  }
+  return readMjName(module, model.names, adr ?? -1);
+}
+
+function buildControlledJoints(
+  moduleInstance: MujocoModule,
+  model: MujocoModel,
+  replay: ViewerReplay | null | undefined,
+) {
+  const replayJointNames = replay?.frames?.[0]?.joints?.map((joint) => joint.name).filter(Boolean) ?? [];
+  if (replayJointNames.length > 0) {
+    const mapped = replayJointNames
+      .map((jointName) => {
+        const jointTypeValue = moduleInstance.mjtObj?.mjOBJ_JOINT;
+        const jointType = typeof jointTypeValue === 'object' ? jointTypeValue?.value : jointTypeValue;
+        const jointId =
+          typeof moduleInstance.mj_name2id === 'function' && Number.isFinite(jointType)
+            ? moduleInstance.mj_name2id(model, jointType, jointName)
+            : -1;
+        if (!Number.isFinite(jointId) || jointId < 0) return null;
+        const qposAdr = model.jnt_qposadr?.[jointId] ?? -1;
+        const qvelAdr = model.jnt_dofadr?.[jointId] ?? -1;
+        if (qposAdr < 0 || qvelAdr < 0) return null;
+        return {
+          name: jointName,
+          qposAdr,
+          qvelAdr,
+          min: model.jnt_range?.[jointId * 2] ?? -Infinity,
+          max: model.jnt_range?.[jointId * 2 + 1] ?? Infinity,
+        } satisfies ControlledJoint;
+      })
+      .filter((joint): joint is ControlledJoint => Boolean(joint));
+    if (mapped.length > 0) return mapped;
+  }
+
+  return Array.from({ length: model.nu }, (_, index) => {
+    const actuatorJointId = model.actuator_trnid?.[index * 2];
+    const jointId = Number.isFinite(actuatorJointId) && actuatorJointId >= 0 ? actuatorJointId : index;
+    return {
+      name: readMjObjectName(moduleInstance, model, 'mjOBJ_JOINT', jointId, model.name_jntadr?.[jointId]) || `joint_${index + 1}`,
+      qposAdr: model.jnt_qposadr[jointId],
+      qvelAdr: model.jnt_dofadr[jointId],
+      min: model.jnt_range[jointId * 2],
+      max: model.jnt_range[jointId * 2 + 1],
+    };
+  });
 }
 
 async function loadMujocoRuntime(): Promise<MujocoModule> {
   const imported = await import(/* @vite-ignore */ MUJOCO_JS_URL);
-  const init = imported.default as (options?: Record<string, unknown>) => Promise<MujocoModule>;
-
-  return init({
+  return imported.default({
     locateFile: (path: string) => (path.endsWith('.wasm') ? MUJOCO_WASM_URL : path),
   });
 }
 
 function normalizeDependencyPath(baseFile: string, fileAttr: string, prefix = '') {
   const currentDir = baseFile.includes('/') ? baseFile.slice(0, baseFile.lastIndexOf('/') + 1) : '';
-  const raw = `${currentDir}${prefix}${fileAttr}`.replace(/\/+/g, '/');
-  const parts = raw.split('/');
+  const parts = `${currentDir}${prefix}${fileAttr}`.replace(/\/+/g, '/').split('/');
   const normalized: string[] = [];
-
   for (const part of parts) {
     if (!part || part === '.') continue;
-    if (part === '..') {
-      normalized.pop();
-      continue;
-    }
-    normalized.push(part);
+    if (part === '..') normalized.pop();
+    else normalized.push(part);
   }
-
   return normalized.join('/');
 }
 
-async function populateVirtualFileSystem(mujoco: MujocoModule, sceneFile: string, sceneXmlOverride?: string | null) {
+async function populateVirtualFileSystem(module: MujocoModule, sceneFile: string, sceneXmlOverride?: string | null) {
   const parser = new DOMParser();
   const queued = [sceneFile];
   const downloaded = new Set<string>();
 
   try {
-    mujoco.FS.mkdir('/working');
-  } catch {
-    // Ignore existing directory.
-  }
+    module.FS.mkdir('/working');
+  } catch {}
 
   while (queued.length > 0) {
     const file = queued.shift()!;
@@ -79,54 +190,37 @@ async function populateVirtualFileSystem(mujoco: MujocoModule, sceneFile: string
     const targetPath = `/working/${file}`;
     const pathParts = file.split('/');
     pathParts.pop();
-
     let currentPath = '/working';
     for (const part of pathParts) {
       currentPath += `/${part}`;
       try {
-        mujoco.FS.mkdir(currentPath);
-      } catch {
-        // Ignore existing directory.
-      }
+        module.FS.mkdir(currentPath);
+      } catch {}
     }
 
     if (file.endsWith('.xml')) {
-      const text =
-        file === sceneFile && sceneXmlOverride
-          ? sceneXmlOverride
-          : await (async () => {
-              const response = await fetch(`${MODEL_ROOT}${file}`);
-              if (!response.ok) {
-                throw new Error(`Failed to fetch ${file}: ${response.status} ${response.statusText}`);
-              }
-              return response.text();
-            })();
-      mujoco.FS.writeFile(targetPath, text);
-
+      const text = file === sceneFile && sceneXmlOverride ? sceneXmlOverride : await (await fetch(`${MODEL_ROOT}${file}`)).text();
+      module.FS.writeFile(targetPath, text);
       const xml = parser.parseFromString(text, 'text/xml');
       const compiler = xml.querySelector('compiler');
       const assetDir = compiler?.getAttribute('assetdir') || '';
       const meshDir = compiler?.getAttribute('meshdir') || assetDir;
       const textureDir = compiler?.getAttribute('texturedir') || assetDir;
-
       xml.querySelectorAll('[file]').forEach((element) => {
         const fileAttr = element.getAttribute('file');
         if (!fileAttr) return;
-
-        let prefix = '';
         const tagName = element.tagName.toLowerCase();
-        if (tagName === 'mesh' && meshDir) prefix = `${meshDir}/`;
-        if ((tagName === 'texture' || tagName === 'hfield') && textureDir) prefix = `${textureDir}/`;
-
+        const prefix =
+          tagName === 'mesh' && meshDir
+            ? `${meshDir}/`
+            : (tagName === 'texture' || tagName === 'hfield') && textureDir
+              ? `${textureDir}/`
+              : '';
         const dependency = normalizeDependencyPath(file, fileAttr, prefix);
         if (!downloaded.has(dependency)) queued.push(dependency);
       });
     } else {
-      const response = await fetch(`${MODEL_ROOT}${file}`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch ${file}: ${response.status} ${response.statusText}`);
-      }
-      mujoco.FS.writeFile(targetPath, new Uint8Array(await response.arrayBuffer()));
+      module.FS.writeFile(targetPath, new Uint8Array(await (await fetch(`${MODEL_ROOT}${file}`)).arrayBuffer()));
     }
   }
 }
@@ -138,30 +232,19 @@ function buildGeom(module: MujocoModule, model: MujocoModel, geomIndex: number) 
   const size = model.geom_size.subarray(geomIndex * 3, geomIndex * 3 + 3);
   const pos = model.geom_pos.subarray(geomIndex * 3, geomIndex * 3 + 3);
   const quat = model.geom_quat.subarray(geomIndex * 4, geomIndex * 4 + 4);
-  const materialId = model.geom_matid[geomIndex];
-
-  const rgba = materialId >= 0
-    ? model.mat_rgba.subarray(materialId * 4, materialId * 4 + 4)
-    : model.geom_rgba.subarray(geomIndex * 4, geomIndex * 4 + 4);
-
+  const rgba = model.geom_rgba.subarray(geomIndex * 4, geomIndex * 4 + 4);
   const getEnumValue = (value: unknown) => (value as { value?: number })?.value ?? value;
   const geomTypes = module.mjtGeom;
 
   let geometry: THREE.BufferGeometry | null = null;
-
-  if (type === getEnumValue(geomTypes.mjGEOM_PLANE)) {
-    geometry = new THREE.PlaneGeometry(Math.max(size[0] * 2, 5), Math.max(size[1] * 2, 5));
-  } else if (type === getEnumValue(geomTypes.mjGEOM_BOX)) {
-    geometry = new THREE.BoxGeometry(size[0] * 2, size[1] * 2, size[2] * 2);
-  } else if (type === getEnumValue(geomTypes.mjGEOM_SPHERE)) {
-    geometry = new THREE.SphereGeometry(size[0], 24, 24);
-  } else if (type === getEnumValue(geomTypes.mjGEOM_CYLINDER)) {
+  if (type === getEnumValue(geomTypes.mjGEOM_PLANE)) geometry = new THREE.PlaneGeometry(Math.max(size[0] * 2, 5), Math.max(size[1] * 2, 5));
+  else if (type === getEnumValue(geomTypes.mjGEOM_BOX)) geometry = new THREE.BoxGeometry(size[0] * 2, size[1] * 2, size[2] * 2);
+  else if (type === getEnumValue(geomTypes.mjGEOM_SPHERE)) geometry = new THREE.SphereGeometry(size[0], 24, 24);
+  else if (type === getEnumValue(geomTypes.mjGEOM_CYLINDER)) {
     geometry = new THREE.CylinderGeometry(size[0], size[0], size[1] * 2, 24);
     geometry.rotateX(Math.PI / 2);
   } else if (type === getEnumValue(geomTypes.mjGEOM_CAPSULE)) {
-    const radius = size[0];
-    const halfLength = size[1];
-    geometry = new THREE.CapsuleGeometry(radius, halfLength * 2, 10, 20);
+    geometry = new THREE.CapsuleGeometry(size[0], size[1] * 2, 10, 20);
     geometry.rotateX(Math.PI / 2);
   } else if (type === getEnumValue(geomTypes.mjGEOM_MESH)) {
     const meshId = model.geom_dataid[geomIndex];
@@ -169,84 +252,76 @@ function buildGeom(module: MujocoModule, model: MujocoModel, geomIndex: number) 
     const vertexCount = model.mesh_vertnum[meshId];
     const faceStart = model.mesh_faceadr[meshId];
     const faceCount = model.mesh_facenum[meshId];
-
     geometry = new THREE.BufferGeometry();
-    geometry.setAttribute(
-      'position',
-      new THREE.Float32BufferAttribute(model.mesh_vert.subarray(vertexStart * 3, (vertexStart + vertexCount) * 3), 3),
-    );
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(model.mesh_vert.subarray(vertexStart * 3, (vertexStart + vertexCount) * 3), 3));
     geometry.setIndex(Array.from(model.mesh_face.subarray(faceStart * 3, (faceStart + faceCount) * 3)));
-    geometry.computeVertexNormals();
   }
 
   if (!geometry) return null;
-
   geometry.computeVertexNormals();
-  const isMeshGeom = type === getEnumValue(geomTypes.mjGEOM_MESH);
-
-  let material: THREE.Material;
-
-  if (!isMeshGeom) {
-    const objectColor = new THREE.Color(rgba[0], rgba[1], rgba[2]);
-    material = new THREE.MeshStandardMaterial({
-      color: objectColor,
-      transparent: rgba[3] < 1,
-      opacity: rgba[3],
-      roughness: 0.55,
-      metalness: 0.08,
-    });
-  } else {
-    const bodyId = model.geom_bodyid[geomIndex];
-    const isDarkAccent =
-      bodyId >= Math.max(1, model.nbody - 2) ||
-      geomIndex >= Math.max(1, model.ngeom - 2);
-    const isMidAccent = !isDarkAccent && (bodyId === 0 || bodyId === 1 || geomIndex % 5 === 0);
-    const baseColor = isDarkAccent
-      ? new THREE.Color('#20242b')
-      : isMidAccent
-        ? new THREE.Color('#d7dbe2')
-        : new THREE.Color('#f4f4f1');
-
-    material = new THREE.MeshPhysicalMaterial({
-      color: baseColor.lerp(new THREE.Color(rgba[0], rgba[1], rgba[2]), rgba[3] < 0.999 ? 0.15 : 0.05),
-      transparent: rgba[3] < 1,
-      opacity: rgba[3],
-      roughness: isDarkAccent ? 0.18 : 0.12,
-      metalness: isDarkAccent ? 0.15 : 0.02,
-      envMapIntensity: isDarkAccent ? 0.9 : 1.35,
-      clearcoat: isDarkAccent ? 0.45 : 1,
-      clearcoatRoughness: isDarkAccent ? 0.18 : 0.06,
-      sheen: isDarkAccent ? 0 : 0.2,
-      sheenColor: isDarkAccent ? new THREE.Color('#000000') : new THREE.Color('#fff8ee'),
-      sheenRoughness: 0.3,
-      emissive: isDarkAccent ? new THREE.Color('#040506') : new THREE.Color('#0a0a0a'),
-      emissiveIntensity: isDarkAccent ? 0.015 : 0.006,
-      side: THREE.DoubleSide,
-    });
-  }
-
   const mesh = new THREE.Mesh(
     geometry,
-    material,
+    new THREE.MeshStandardMaterial({
+      color: new THREE.Color(rgba[0], rgba[1], rgba[2]),
+      transparent: rgba[3] < 1,
+      opacity: rgba[3],
+      roughness: 0.35,
+      metalness: 0.05,
+    }),
   );
-
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   mesh.position.set(pos[0], pos[1], pos[2]);
   mesh.quaternion.set(quat[1], quat[2], quat[3], quat[0]);
-
   return mesh;
 }
 
-const MujocoViewerInner: React.FC<MujocoViewerProps> = ({ sceneFile = DEFAULT_SCENE_FILE, sceneXmlOverride = null }) => {
+function sampleReplayFrame(replay: ViewerReplay | null | undefined, timeValue: number) {
+  if (!replay?.frames?.length) return null;
+  if (timeValue <= replay.frames[0].time) return replay.frames[0];
+  for (let index = 0; index < replay.frames.length - 1; index += 1) {
+    const start = replay.frames[index];
+    const end = replay.frames[index + 1];
+    if (timeValue <= end.time) {
+      const alpha = clamp((timeValue - start.time) / Math.max(end.time - start.time, 1e-6), 0, 1);
+      return {
+        ...start,
+        time: timeValue,
+        phase: alpha < 0.5 ? start.phase : end.phase,
+        collisionActiveCount: alpha < 0.5 ? start.collisionActiveCount : end.collisionActiveCount,
+        lastCollisionPair: alpha < 0.5 ? start.lastCollisionPair : end.lastCollisionPair,
+        joints: start.joints.map((joint, jointIndex) => {
+          const nextJoint = end.joints[jointIndex] ?? joint;
+          return {
+            name: joint.name,
+            position: joint.position + (nextJoint.position - joint.position) * alpha,
+            velocity: joint.velocity + (nextJoint.velocity - joint.velocity) * alpha,
+            torque: joint.torque + (nextJoint.torque - joint.torque) * alpha,
+            error: joint.error + (nextJoint.error - joint.error) * alpha,
+          };
+        }),
+        bodyPoses: alpha < 0.5 ? start.bodyPoses : end.bodyPoses,
+      } satisfies ViewerReplayFrame;
+    }
+  }
+  return replay.frames[replay.frames.length - 1];
+}
+
+const MujocoViewerInner: React.FC<MujocoViewerProps> = ({
+  sceneFile = DEFAULT_SCENE_FILE,
+  sceneXmlOverride = null,
+  trajectoryPlan = null,
+  servoConfig,
+  replay = null,
+  onStatusUpdate,
+}) => {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const [loadState, setLoadState] = React.useState<LoadState>('loading');
-  const [statusText, setStatusText] = React.useState('正在初始化 MuJoCo WASM...');
+  const [statusText, setStatusText] = React.useState('正在加载后端回放播放器...');
   const [errorText, setErrorText] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let disposed = false;
-    let started = false;
     let renderer: THREE.WebGLRenderer | null = null;
     let controls: OrbitControls | null = null;
     let model: MujocoModel | null = null;
@@ -258,58 +333,72 @@ const MujocoViewerInner: React.FC<MujocoViewerProps> = ({ sceneFile = DEFAULT_SC
     let pmremGenerator: THREE.PMREMGenerator | null = null;
     let envRenderTarget: THREE.WebGLRenderTarget | null = null;
     let lastFrameTime = 0;
-    let stepAccumulator = 0;
-    let motionClock = 0;
+    let playbackTime = 0;
+    let lastTelemetryUpdate = 0;
     let controlledJoints: ControlledJoint[] = [];
-    let activeTargets: number[] = [];
-    let pendingTargets: number[] = [];
-    let nextTargetTime = 0;
+    const bodyGroups: THREE.Group[] = [];
+    const freejointQposByBodyName = new Map<string, number>();
+
     async function boot() {
       const container = containerRef.current;
-      if (!container) return;
-      if (started || container.clientWidth === 0 || container.clientHeight === 0) return;
-      started = true;
+      if (!container || container.clientWidth === 0 || container.clientHeight === 0) return;
 
       try {
         setLoadState('loading');
         setErrorText(null);
-        setStatusText('正在初始化 MuJoCo WASM...');
+        setStatusText('正在装载后端场景...');
+        onStatusUpdate?.(EMPTY_STATUS);
 
         moduleInstance = await loadMujocoRuntime();
         if (disposed) return;
-
-        setStatusText(`正在加载 ${sceneFile}...`);
         await populateVirtualFileSystem(moduleInstance, sceneFile, sceneXmlOverride);
         if (disposed) return;
-
-        setStatusText('正在编译模型...');
         model = moduleInstance.MjModel.loadFromXML(`/working/${sceneFile}`);
         data = new moduleInstance.MjData(model);
-
-        controlledJoints = Array.from({ length: model.njnt }, (_, jointIndex) => {
-          const qposAdr = model.jnt_qposadr[jointIndex];
-          const rangeMin = model.jnt_range[jointIndex * 2];
-          const rangeMax = model.jnt_range[jointIndex * 2 + 1];
-          const span = Math.max(0.1, rangeMax - rangeMin);
-
-          return {
-            jointIndex,
-            qposAdr,
-            min: rangeMin,
-            max: rangeMax,
-            maxSpeed: clamp(span * 0.28, 0.18, 0.95),
-          };
-        }).filter((joint) => Number.isFinite(joint.min) && Number.isFinite(joint.max));
-
         if (typeof model.nkey === 'number' && model.nkey > 0 && typeof moduleInstance.mj_resetDataKeyframe === 'function') {
           moduleInstance.mj_resetDataKeyframe(model, data, 0);
         }
         moduleInstance.mj_forward(model, data);
 
-        activeTargets = controlledJoints.map((joint) => data.qpos[joint.qposAdr]);
-        pendingTargets = [...activeTargets];
-        nextTargetTime = 1.5;
-        motionClock = 0;
+        controlledJoints = buildControlledJoints(moduleInstance, model, replay);
+
+        for (let bodyIndex = 0; bodyIndex < model.nbody; bodyIndex += 1) {
+          const bodyName = readMjObjectName(moduleInstance, model, 'mjOBJ_BODY', bodyIndex, model.name_bodyadr?.[bodyIndex]);
+          const jointAdr = model.body_jntadr?.[bodyIndex] ?? -1;
+          if (jointAdr >= 0) {
+            const qposAdr = model.jnt_qposadr?.[jointAdr] ?? -1;
+            if (qposAdr >= 0) freejointQposByBodyName.set(bodyName, qposAdr);
+          }
+        }
+
+        const firstFrame = replay?.frames?.[0];
+        if (firstFrame) {
+          firstFrame.joints.forEach((joint, index) => {
+            const controlled = controlledJoints[index];
+            if (!controlled) return;
+            data.qpos[controlled.qposAdr] = clamp(joint.position, controlled.min, controlled.max);
+            data.qvel[controlled.qvelAdr] = joint.velocity;
+          });
+          firstFrame.bodyPoses?.forEach((pose) => {
+            const qposAdr = freejointQposByBodyName.get(pose.name);
+            if (qposAdr === undefined) return;
+            data.qpos[qposAdr] = pose.position[0];
+            data.qpos[qposAdr + 1] = pose.position[1];
+            data.qpos[qposAdr + 2] = pose.position[2];
+            data.qpos[qposAdr + 3] = pose.quaternion[0];
+            data.qpos[qposAdr + 4] = pose.quaternion[1];
+            data.qpos[qposAdr + 5] = pose.quaternion[2];
+            data.qpos[qposAdr + 6] = pose.quaternion[3];
+          });
+          moduleInstance.mj_forward(model, data);
+        } else if (trajectoryPlan?.samples?.length) {
+          const initial = trajectoryPlan.samples[0];
+          controlledJoints.forEach((joint, index) => {
+            data.qpos[joint.qposAdr] = clamp(initial.joints[index] ?? 0, joint.min, joint.max);
+            data.qvel[joint.qvelAdr] = 0;
+          });
+          moduleInstance.mj_forward(model, data);
+        }
 
         const scene = new THREE.Scene();
         scene.background = new THREE.Color('#1c2430');
@@ -328,6 +417,8 @@ const MujocoViewerInner: React.FC<MujocoViewerProps> = ({ sceneFile = DEFAULT_SC
         renderer.toneMappingExposure = 0.88;
         renderer.shadowMap.enabled = true;
         renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.domElement.style.pointerEvents = 'auto';
+        renderer.domElement.style.touchAction = 'none';
         container.innerHTML = '';
         container.appendChild(renderer.domElement);
 
@@ -337,12 +428,14 @@ const MujocoViewerInner: React.FC<MujocoViewerProps> = ({ sceneFile = DEFAULT_SC
 
         controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
+        controls.enablePan = true;
+        controls.enableRotate = true;
+        controls.enableZoom = true;
         controls.target.set(0.3, 0, 0.7);
         controls.minDistance = 1;
         controls.maxDistance = 8;
 
         scene.add(new THREE.AmbientLight(0xcfd8e3, 0.08));
-
         const keyLight = new THREE.DirectionalLight(0xffffff, 4.2);
         keyLight.position.set(2.8, -1.6, 6.6);
         keyLight.castShadow = true;
@@ -352,84 +445,10 @@ const MujocoViewerInner: React.FC<MujocoViewerProps> = ({ sceneFile = DEFAULT_SC
         scene.add(keyLight);
         scene.add(keyLight.target);
 
-        const fillLight = new THREE.DirectionalLight(0xc9d6e6, 0.2);
-        fillLight.position.set(-3.6, 2.4, 3.8);
-        scene.add(fillLight);
-
-        const rimLight = new THREE.DirectionalLight(0xe7edf7, 1.35);
-        rimLight.position.set(-2.2, -3.8, 4.6);
-        scene.add(rimLight);
-
-        const topLight = new THREE.SpotLight(0xffffff, 5.4, 0, Math.PI / 7, 0.25, 0.95);
-        topLight.position.set(0.8, 0.2, 7.6);
-        topLight.castShadow = true;
-        topLight.shadow.mapSize.set(2048, 2048);
-        topLight.shadow.radius = 8;
-        topLight.target.position.set(0.2, 0, 0.75);
-        scene.add(topLight);
-        scene.add(topLight.target);
-
-        const frontAccent = new THREE.SpotLight(0xf8fbff, 1.5, 0, Math.PI / 8, 0.42, 1.15);
-        frontAccent.position.set(3.6, -2.4, 2.8);
-        frontAccent.target.position.set(0.25, 0, 0.85);
-        scene.add(frontAccent);
-        scene.add(frontAccent.target);
-
-        const centerGlow = new THREE.PointLight(0xffffff, 0.7, 2.8, 2);
-        centerGlow.position.set(0.2, 0, 1.2);
-        scene.add(centerGlow);
-
-        const floor = new THREE.Mesh(
-          new THREE.PlaneGeometry(18, 18),
-          new THREE.MeshStandardMaterial({
-            color: '#454d56',
-            roughness: 0.92,
-            metalness: 0.02,
-            envMapIntensity: 0.02,
-          }),
-        );
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(18, 18), new THREE.MeshStandardMaterial({ color: '#454d56', roughness: 0.92, metalness: 0.02 }));
         floor.position.z = -0.03;
         floor.receiveShadow = true;
         scene.add(floor);
-
-        const robotPad = new THREE.Mesh(
-          new THREE.CircleGeometry(1.45, 48),
-          new THREE.MeshStandardMaterial({
-            color: '#2f3740',
-            roughness: 0.78,
-            metalness: 0.03,
-            envMapIntensity: 0.04,
-          }),
-        );
-        robotPad.position.set(0.2, 0, -0.018);
-        scene.add(robotPad);
-
-        const robotHighlight = new THREE.Mesh(
-          new THREE.CircleGeometry(1.02, 48),
-          new THREE.MeshBasicMaterial({
-            color: '#d9dee5',
-            transparent: true,
-            opacity: 0.16,
-          }),
-        );
-        robotHighlight.position.set(0.2, 0, -0.017);
-        scene.add(robotHighlight);
-
-        const aisleLineMaterial = new THREE.MeshBasicMaterial({ color: '#b8860b', transparent: true, opacity: 0.52 });
-        const aisleLineA = new THREE.Mesh(new THREE.PlaneGeometry(0.08, 10), aisleLineMaterial);
-        aisleLineA.position.set(0, 0, -0.02);
-        scene.add(aisleLineA);
-
-        const aisleLineB = new THREE.Mesh(new THREE.PlaneGeometry(10, 0.08), aisleLineMaterial);
-        aisleLineB.position.set(0, 0, -0.02);
-        scene.add(aisleLineB);
-
-        const workCellOutline = new THREE.Mesh(
-          new THREE.RingGeometry(2.1, 2.18, 64),
-          new THREE.MeshBasicMaterial({ color: '#9f7510', transparent: true, opacity: 0.28, side: THREE.DoubleSide }),
-        );
-        workCellOutline.position.set(0.2, 0, -0.015);
-        scene.add(workCellOutline);
 
         const grid = new THREE.GridHelper(18, 36, 0x444c56, 0x525b65);
         grid.rotation.x = Math.PI / 2;
@@ -438,47 +457,15 @@ const MujocoViewerInner: React.FC<MujocoViewerProps> = ({ sceneFile = DEFAULT_SC
         (grid.material as THREE.Material).opacity = 0.1;
         scene.add(grid);
 
-        const backWall = new THREE.Mesh(
-          new THREE.PlaneGeometry(18, 6),
-          new THREE.MeshStandardMaterial({
-            color: '#3f4955',
-            roughness: 0.95,
-            metalness: 0.03,
-            envMapIntensity: 0.03,
-            side: THREE.DoubleSide,
-          }),
-        );
-        backWall.position.set(0, 5.6, 2.5);
-        backWall.rotation.x = Math.PI / 2;
-        backWall.receiveShadow = true;
-        scene.add(backWall);
-
-        const sideWall = new THREE.Mesh(
-          new THREE.PlaneGeometry(12, 6),
-          new THREE.MeshStandardMaterial({
-            color: '#37414c',
-            roughness: 0.96,
-            metalness: 0.02,
-            envMapIntensity: 0.02,
-            side: THREE.DoubleSide,
-          }),
-        );
-        sideWall.position.set(-6, 0, 2.5);
-        sideWall.rotation.y = Math.PI / 2;
-        sideWall.receiveShadow = true;
-        scene.add(sideWall);
-
-        const bodies: THREE.Group[] = [];
         for (let bodyIndex = 0; bodyIndex < model.nbody; bodyIndex += 1) {
           const group = new THREE.Group();
-          bodies.push(group);
+          bodyGroups.push(group);
           scene.add(group);
         }
-
         for (let geomIndex = 0; geomIndex < model.ngeom; geomIndex += 1) {
           const bodyId = model.geom_bodyid[geomIndex];
           const geom = buildGeom(moduleInstance, model, geomIndex);
-          if (geom) bodies[bodyId].add(geom);
+          if (geom) bodyGroups[bodyId].add(geom);
         }
 
         const resize = () => {
@@ -492,60 +479,63 @@ const MujocoViewerInner: React.FC<MujocoViewerProps> = ({ sceneFile = DEFAULT_SC
         resize();
 
         const step = () => {
-          if (disposed || !moduleInstance || !model || !data || !renderer || !controls) return;
+          if (disposed || !renderer || !controls || !moduleInstance || !model || !data) return;
 
           const now = performance.now();
-          if (lastFrameTime === 0) {
-            lastFrameTime = now;
-          }
-
-          const frameDeltaSeconds = Math.min((now - lastFrameTime) / 1000, 0.1);
+          if (lastFrameTime === 0) lastFrameTime = now;
+          const deltaSeconds = Math.min((now - lastFrameTime) / 1000, 0.05);
           lastFrameTime = now;
 
-          const simulationTimestep =
-            typeof model.opt?.timestep === 'number' && model.opt.timestep > 0 ? model.opt.timestep : 1 / 60;
-          stepAccumulator += frameDeltaSeconds;
-
-          const maxStepsPerFrame = Math.max(1, Math.ceil(0.1 / simulationTimestep));
-          let stepsThisFrame = 0;
-          while (stepAccumulator >= simulationTimestep && stepsThisFrame < maxStepsPerFrame) {
-            motionClock += simulationTimestep;
-
-            if (motionClock >= nextTargetTime) {
-              pendingTargets = controlledJoints.map((joint, index) => {
-                const span = joint.max - joint.min;
-                const safeMin = joint.min + span * 0.18;
-                const safeMax = joint.max - span * 0.18;
-                const randomTarget = safeMin + Math.random() * Math.max(0.01, safeMax - safeMin);
-                return clamp(randomTarget, joint.min, joint.max);
+          if (replay?.frames?.length) {
+            const activeReplayDuration =
+              typeof trajectoryPlan?.duration === 'number' && Number.isFinite(trajectoryPlan.duration) && trajectoryPlan.duration > 0
+                ? Math.min(replay.duration, trajectoryPlan.duration)
+                : replay.duration;
+            if (activeReplayDuration > 0) {
+              playbackTime = (playbackTime + deltaSeconds) % activeReplayDuration;
+            } else {
+              playbackTime = 0;
+            }
+            const frame = sampleReplayFrame(replay, playbackTime);
+            if (frame) {
+              frame.joints.forEach((joint, index) => {
+                const controlled = controlledJoints[index];
+                if (!controlled) return;
+                data.qpos[controlled.qposAdr] = clamp(joint.position, controlled.min, controlled.max);
+                data.qvel[controlled.qvelAdr] = joint.velocity;
               });
-              nextTargetTime = motionClock + 2.5 + Math.random() * 2.5;
+              frame.bodyPoses?.forEach((pose) => {
+                const qposAdr = freejointQposByBodyName.get(pose.name);
+                if (qposAdr === undefined) return;
+                data.qpos[qposAdr] = pose.position[0];
+                data.qpos[qposAdr + 1] = pose.position[1];
+                data.qpos[qposAdr + 2] = pose.position[2];
+                data.qpos[qposAdr + 3] = pose.quaternion[0];
+                data.qpos[qposAdr + 4] = pose.quaternion[1];
+                data.qpos[qposAdr + 5] = pose.quaternion[2];
+                data.qpos[qposAdr + 6] = pose.quaternion[3];
+              });
+              moduleInstance.mj_forward(model, data);
+              if (now - lastTelemetryUpdate >= 120) {
+                onStatusUpdate?.({
+                  phase: frame.phase,
+                  collisionActiveCount: frame.collisionActiveCount,
+                  lastCollisionPair: frame.lastCollisionPair,
+                  joints: frame.joints,
+                });
+                lastTelemetryUpdate = now;
+              }
             }
-
-            for (let index = 0; index < controlledJoints.length; index += 1) {
-              const joint = controlledJoints[index];
-              const currentQ = data.qpos[joint.qposAdr];
-              activeTargets[index] = lerp(activeTargets[index], pendingTargets[index], 0.01);
-              const positionError = activeTargets[index] - currentQ;
-              const maxDelta = joint.maxSpeed * simulationTimestep;
-              const nextQ = currentQ + clamp(positionError, -maxDelta, maxDelta);
-              data.qpos[joint.qposAdr] = clamp(nextQ, joint.min, joint.max);
-            }
-
-            moduleInstance.mj_forward(model, data);
-            stepAccumulator -= simulationTimestep;
-            stepsThisFrame += 1;
+          } else if (now - lastTelemetryUpdate >= 200) {
+            onStatusUpdate?.(EMPTY_STATUS);
+            lastTelemetryUpdate = now;
           }
 
-          for (let bodyIndex = 0; bodyIndex < bodies.length; bodyIndex += 1) {
-            const body = bodies[bodyIndex];
+          for (let bodyIndex = 0; bodyIndex < bodyGroups.length; bodyIndex += 1) {
+            const body = bodyGroups[bodyIndex];
             body.position.set(data.xpos[bodyIndex * 3], data.xpos[bodyIndex * 3 + 1], data.xpos[bodyIndex * 3 + 2]);
-            body.quaternion.set(
-              data.xquat[bodyIndex * 4 + 1],
-              data.xquat[bodyIndex * 4 + 2],
-              data.xquat[bodyIndex * 4 + 3],
-              data.xquat[bodyIndex * 4],
-            );
+            body.quaternion.set(data.xquat[bodyIndex * 4 + 1], data.xquat[bodyIndex * 4 + 2], data.xquat[bodyIndex * 4 + 3], data.xquat[bodyIndex * 4]);
+            body.updateMatrixWorld();
           }
 
           controls.update();
@@ -553,43 +543,31 @@ const MujocoViewerInner: React.FC<MujocoViewerProps> = ({ sceneFile = DEFAULT_SC
           animationFrame = window.requestAnimationFrame(step);
         };
 
-        setStatusText(`模型：${sceneFile}`);
+        setStatusText(replay?.frames?.length ? '后端回放加载完成' : `模型：${sceneFile}`);
         setLoadState('ready');
         step();
-
-        return () => window.removeEventListener('resize', resize);
       } catch (error) {
-        started = false;
-        if (disposed) return;
-        const message = error instanceof Error
-          ? error.message
-          : typeof error === 'string'
-            ? error
-            : JSON.stringify(error);
-        console.error('MuJoCo viewer init error', error);
+        const message = error instanceof Error ? error.message : typeof error === 'string' ? error : JSON.stringify(error);
         setLoadState('error');
-        setErrorText(message || 'Unknown MuJoCo initialization error');
-        setStatusText('MuJoCo failed to initialize');
+        setErrorText(message || 'Unknown backend playback initialization error');
+        setStatusText('后端回放播放器初始化失败');
       }
     }
 
     const tryBoot = () => {
       const container = containerRef.current;
-      if (!container || disposed || started) return;
+      if (!container || disposed) return;
       if (container.clientWidth === 0 || container.clientHeight === 0) {
-        setStatusText('Waiting for viewer layout...');
+        setStatusText('等待视图布局完成...');
         return;
       }
       void boot();
     };
 
     tryBoot();
-
     const container = containerRef.current;
     if (container && typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(() => {
-        tryBoot();
-      });
+      resizeObserver = new ResizeObserver(() => tryBoot());
       resizeObserver.observe(container);
     }
 
@@ -606,34 +584,15 @@ const MujocoViewerInner: React.FC<MujocoViewerProps> = ({ sceneFile = DEFAULT_SC
       data?.delete?.();
       model?.delete?.();
     };
-  }, [sceneFile, sceneXmlOverride]);
+  }, [sceneFile, sceneXmlOverride, trajectoryPlan, servoConfig, replay, onStatusUpdate]);
 
   return (
-    <div className="relative w-full h-full overflow-hidden rounded-xl border border-white/10 bg-[#020617]">
+    <div className="relative h-full w-full overflow-hidden rounded-xl border border-white/10 bg-[#020617]">
       <div ref={containerRef} className="absolute inset-0" />
-
-      <div className="absolute top-4 left-4 z-10 flex flex-col gap-2 pointer-events-none">
-        <div className="bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10 flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full ${loadState === 'error' ? 'bg-rose-500' : 'bg-emerald-500 animate-pulse'}`} />
-          <span className="text-xs font-mono text-emerald-400 font-bold">MuJoCo WASM Engine</span>
-        </div>
-        <div className="bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10">
-          <span className="text-xs font-mono text-muted">{statusText}</span>
-        </div>
-      </div>
-
-      <div className="absolute bottom-4 left-4 z-10 pointer-events-none">
-        <div className="bg-black/60 backdrop-blur-md px-3 py-2 rounded-lg border border-white/10 flex flex-col gap-1">
-          <span className="text-[10px] font-mono text-muted uppercase">物理状态</span>
-          <span className="text-xs font-mono text-blue-400">{loadState === 'ready' ? '仿真运行中 + STL 可视化' : '正在准备场景'}</span>
-          <span className="text-xs font-mono text-main">任务：ER15-1400 仿真</span>
-        </div>
-      </div>
-
       {loadState !== 'ready' && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/55 backdrop-blur-sm">
           <div className="rounded-2xl border border-white/10 bg-black/60 px-5 py-4 text-center">
-            <div className="text-sm font-semibold text-slate-100">{loadState === 'error' ? 'MuJoCo 加载失败' : '正在加载仿真'}</div>
+            <div className="text-sm font-semibold text-slate-100">{loadState === 'error' ? '回放加载失败' : '正在加载回放'}</div>
             <div className="mt-2 max-w-[280px] text-xs font-mono text-slate-300">{errorText ?? statusText}</div>
           </div>
         </div>
